@@ -1,0 +1,6 @@
+# robots.txt for Blink OS
+User-agent: *
+Allow: /
+
+# Sitemaps
+Sitemap: https://blink-os.vercel.app/sitemap.xml
