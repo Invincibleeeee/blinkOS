@@ -70,6 +70,104 @@ cv2.createTrackbar("HScroll Thresh", "Head Control UX", BASE_HSCROLL_THRESHOLD, 
 print("INFO: Press 'c' to calibrate your neutral head position. ESC to quit.")
 print("INFO: Use trackbars to adjust thresholds (lower = more sensitive).")
 
+# ========================
+# Main loop
+# ========================
+while True:
+    ret, frame = cap.read()
+    if not ret:
+        print("WARNING: Failed to read frame from webcam. Retrying...")
+        continue  # skip this iteration
+
+    frame = cv2.flip(frame, 1)  # mirror
+    h, w, _ = frame.shape
+    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+
+    try:
+        results = face_mesh.process(rgb)
+    except Exception as e:
+        print(f"WARNING: Mediapipe error: {e}")
+        continue  # skip this frame
+
+    # Get current thresholds from trackbars (sensitivity options)
+    SCROLL_THRESHOLD = cv2.getTrackbarPos("VScroll Thresh", "Head Control UX")
+    HSCROLL_THRESHOLD = cv2.getTrackbarPos("HScroll Thresh", "Head Control UX")
+
+    if results.multi_face_landmarks:
+        face_landmarks = results.multi_face_landmarks[0]
+
+        # Draw face mesh
+        mp_draw.draw_landmarks(
+            frame, face_landmarks, mp_face.FACEMESH_TESSELATION,
+            mp_draw.DrawingSpec(color=(0,255,0), thickness=1, circle_radius=1),
+            mp_draw.DrawingSpec(color=(0,0,255), thickness=1)
+        )
+
+        # Get nose tip
+        nose_x, nose_y = get_nose_pos(face_landmarks.landmark, w, h)
+
+        # Apply smoothing
+        nose_x_history.append(nose_x)
+        nose_y_history.append(nose_y)
+        smooth_x = int(sum(nose_x_history)/len(nose_x_history))
+        smooth_y = int(sum(nose_y_history)/len(nose_y_history))
+
+        # Draw nose tip
+        cv2.circle(frame, (smooth_x, smooth_y), 6, (255,0,0), -1)
+
+        if calibrated:
+            dx = smooth_x - neutral_x
+            dy = smooth_y - neutral_y
+
+            current_time = time.time()
+
+            # Vertical scroll up/down with cooldown and proportional amount
+            if abs(dy) > SCROLL_THRESHOLD and current_time - last_action_time['vertical'] > ACTION_COOLDOWN:
+                # Proportional scroll for smoother control
+                scroll_factor = abs(dy) / SCROLL_THRESHOLD
+                scroll_amount = int(50 * scroll_factor)  # Base amount scaled by how far head is moved
+                if dy < -SCROLL_THRESHOLD:
+                    pyautogui.scroll(scroll_amount)
+                elif dy > SCROLL_THRESHOLD:
+                    pyautogui.scroll(-scroll_amount)
+                last_action_time['vertical'] = current_time
+
+            # Horizontal scroll left/right with cooldown and proportional amount
+            if abs(dx) > HSCROLL_THRESHOLD and current_time - last_action_time['horizontal'] > ACTION_COOLDOWN:
+                # Proportional hscroll for smoother control
+                hscroll_factor = abs(dx) / HSCROLL_THRESHOLD
+                hscroll_amount = int(50 * hscroll_factor)  # Base amount scaled by how far head is moved
+                if dx < -HSCROLL_THRESHOLD:
+                    horizontal_scroll(-hscroll_amount)  # Left: negative
+                elif dx > HSCROLL_THRESHOLD:
+                    horizontal_scroll(hscroll_amount)  # Right: positive
+                last_action_time['horizontal'] = current_time
+
+            # Draw neutral position visual
+            cv2.circle(frame, (neutral_x, neutral_y), 6, (0,255,255), 2)
+            cv2.line(frame, (neutral_x, 0), (neutral_x, h), (0,255,255), 1)
+            cv2.line(frame, (0, neutral_y), (w, neutral_y), (0,255,255), 1)
+
+    # UI Text
+    if not calibrated:
+        cv2.putText(frame, "Press 'c' to calibrate neutral head", (10,30),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0,255,255), 2)
+    else:
+        cv2.putText(frame, "Calibrated! Move your head to scroll vertically/horizontally", (10,30),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,255,0), 2)
+
+    cv2.imshow("Head Control UX", frame)
+    key = cv2.waitKey(1) & 0xFF
+
+    if key == 27:  # ESC
+        break
+    elif key == ord('c'):
+        if results.multi_face_landmarks:
+            # Use smoothed position for calibration
+            neutral_x = smooth_x
+            neutral_y = smooth_y
+            calibrated = True
+            print(f"Calibrated at: {neutral_x}, {neutral_y}")
 
 # ========================
 # Cleanup
